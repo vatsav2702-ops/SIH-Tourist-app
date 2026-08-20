@@ -1,0 +1,56 @@
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'services/firebase_service.dart';
+import 'screens/main_navigation_screen.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  try {
+    await Firebase.initializeApp();
+    FirebaseService().markInitialized();
+  } catch (e) {
+    // Gracefully fallback to internal Firebase real-time mock data engine if unconfigured
+  }
+
+  runApp(const SmartTravelApp());
+}
+
+class SmartTravelApp extends StatelessWidget {
+  const SmartTravelApp({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Smart Travel & Heritage Companion',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        primaryColor: const Color(0xFF1E1B4B), // Deep Indigo
+        scaffoldBackgroundColor: const Color(0xFFF8FAFC), // Slate background
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF0D9488), // Teal Accent
+          primary: const Color(0xFF1E1B4B),
+          secondary: const Color(0xFF0D9488),
+          tertiary: const Color(0xFF4F46E5),
+          surface: Colors.white,
+          background: const Color(0xFFF8FAFC),
+        ),
+        textTheme: GoogleFonts.outfitTextTheme(Theme.of(context).textTheme),
+        cardTheme: CardThemeData(
+          elevation: 3,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          color: Colors.white,
+        ),
+        appBarTheme: const AppBarTheme(
+          elevation: 0,
+          centerTitle: false,
+          backgroundColor: Color(0xFF1E1B4B),
+          foregroundColor: Colors.white,
+        ),
+      ),
+      home: const MainNavigationScreen(),
+    );
+  }
+}

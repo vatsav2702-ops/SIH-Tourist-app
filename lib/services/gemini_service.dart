@@ -1,0 +1,200 @@
+import 'dart:convert';
+import 'package:google_generative_ai/google_generative_ai.dart';
+import '../models/itinerary_model.dart';
+
+class GeminiService {
+  final String? apiKey;
+
+  GeminiService({this.apiKey});
+
+  Future<ItineraryPlan> generateItinerary({
+    required String city,
+    required double budget,
+    required int days,
+    required List<String> interests,
+  }) async {
+    final effectiveApiKey = apiKey ?? const String.fromEnvironment('GEMINI_API_KEY', defaultValue: '');
+
+    if (effectiveApiKey.isNotEmpty) {
+      try {
+        final model = GenerativeModel(
+          model: 'gemini-2.5-flash',
+          apiKey: effectiveApiKey,
+          generationConfig: GenerationConfig(
+            responseMimeType: 'application/json',
+            temperature: 0.7,
+          ),
+        );
+
+        final prompt = '''
+You are an expert Indian tourism & heritage planner. Generate a highly detailed, realistic ${days}-day travel itinerary for $city, India with a total budget of ₹${budget.toInt()}.
+User interests: ${interests.join(', ')}.
+
+Respond strictly in valid JSON matching this exact structure:
+{
+  "city": "$city",
+  "budget": ${budget.toInt()},
+  "durationDays": $days,
+  "interests": ${jsonEncode(interests)},
+  "totalEstimatedBudget": "₹${budget.toInt()}",
+  "days": [
+    {
+      "dayNumber": 1,
+      "title": "Day 1 Title",
+      "totalDayCost": "₹800",
+      "stops": [
+        {
+          "timeOfDay": "Morning",
+          "spotName": "Spot Name",
+          "description": "Brief description of heritage activity and street food highlights.",
+          "estimatedCost": "₹200",
+          "duration": "2 Hours"
+        },
+        {
+          "timeOfDay": "Afternoon",
+          "spotName": "Spot Name 2",
+          "description": "Exploration description.",
+          "estimatedCost": "₹350",
+          "duration": "2.5 Hours"
+        },
+        {
+          "timeOfDay": "Evening",
+          "spotName": "Spot Name 3",
+          "description": "Sunset view & local market.",
+          "estimatedCost": "₹250",
+          "duration": "2 Hours"
+        }
+      ]
+    }
+  ]
+}
+''';
+
+        final response = await model.generateContent([Content.text(prompt)]);
+        if (response.text != null && response.text!.isNotEmpty) {
+          final jsonMap = jsonDecode(response.text!);
+          return ItineraryPlan.fromJson(jsonMap);
+        }
+      } catch (e) {
+        // Fallback on network or API key issues
+      }
+    }
+
+    // Fallback generator when API key is unconfigured or offline
+    return _generateFallbackItinerary(city, budget, days, interests);
+  }
+
+  ItineraryPlan _generateFallbackItinerary(
+    String city,
+    double budget,
+    int days,
+    List<String> interests,
+  ) {
+    double dailyBudget = budget / days;
+    List<DayPlan> dayPlans = [];
+
+    Map<String, List<Map<String, String>>> cityHighlights = {
+      'Vijayawada': [
+        {
+          'm': 'Kanaka Durga Temple',
+          'm_desc': 'Early morning divine darshan atop Indrakeeladri hill.',
+          'a': 'Undavalli Rock Cut Caves',
+          'a_desc': 'Explore 5th-century monolithic sandstone architecture.',
+          'e': 'Prakasam Barrage & Bhavani Island',
+          'e_desc': 'Sunset stroll along Krishna river barrage and boat ride to island.',
+        },
+        {
+          'm': 'Bapu Museum & Victoria Jubilee Hall',
+          'm_desc': 'View ancient sculptures, bronze idols, and weapons.',
+          'a': 'Kondapalli Fort & Artisan Village',
+          'a_desc': 'Visit wooden toy craft workshops and hilltop fortress ruins.',
+          'e': 'Besant Road Heritage Food Walk',
+          'e_desc': 'Savor Punugulu, Mirchi Bajji, and local sweets.',
+        },
+        {
+          'm': 'Mangalagiri Panakala Narasimha Temple',
+          'm_desc': 'Historic temple famous for jaggery water offerings.',
+          'a': 'Mangalagiri Handloom Weavers Market',
+          'a_desc': 'Shop authentic GI-tagged cotton and silk sarees.',
+          'e': 'Gunadala Mary Matha Church & Hilltop',
+          'e_desc': 'Panoramic view of Vijayawada city from the hilltop shrine.',
+        },
+      ],
+      'Hyderabad': [
+        {
+          'm': 'Charminar & Mecca Masjid',
+          'm_desc': 'Morning heritage walk around historic 1591 monument.',
+          'a': 'Chowmahalla Palace',
+          'a_desc': 'Marvel at royal Nizami throne rooms & crystal chandeliers.',
+          'e': 'Laad Bazaar Bangle Market & Nimrah Cafe',
+          'e_desc': 'Taste hot Irani Chai with Osmania biscuits near Charminar.',
+        },
+        {
+          'm': 'Golconda Fort Acoustic Tour',
+          'm_desc': 'Guided acoustics trek up the majestic hilltop fort.',
+          'a': 'Qutb Shahi Tombs',
+          'a_desc': 'Stroll through 21 domed royal granite tombs.',
+          'e': 'Hussain Sagar Lake & Statue of Equality',
+          'e_desc': 'Evening boat ride to Buddha statue & illuminated skyline.',
+        },
+        {
+          'm': 'Salar Jung Museum',
+          'm_desc': 'Explore world\'s largest one-man antique collection.',
+          'a': 'Birla Mandir & Science Center',
+          'a_desc': 'Marble temple atop Naubat Pahad with planetarium view.',
+          'e': 'Necklace Road Street Food Festival',
+          'e_desc': 'Sample Hyderabadi Biryani and Double Ka Meetha.',
+        },
+      ]
+    };
+
+    var highlights = cityHighlights[city] ?? cityHighlights['Vijayawada']!;
+
+    for (int i = 1; i <= days; i++) {
+      var template = highlights[(i - 1) % highlights.length];
+      double morningCost = dailyBudget * 0.25;
+      double afternoonCost = dailyBudget * 0.45;
+      double eveningCost = dailyBudget * 0.30;
+
+      dayPlans.add(
+        DayPlan(
+          dayNumber: i,
+          title: 'Day $i: ${interests.contains("History") ? "Heritage" : "Culture"} & ${interests.contains("Food") ? "Gastronomy" : "Sightseeing"}',
+          totalDayCost: '₹${dailyBudget.toInt()}',
+          stops: [
+            ActivityStop(
+              timeOfDay: 'Morning (8:30 AM)',
+              spotName: template['m']!,
+              description: template['m_desc']!,
+              estimatedCost: '₹${morningCost.toInt()}',
+              duration: '2.5 Hours',
+            ),
+            ActivityStop(
+              timeOfDay: 'Afternoon (1:00 PM)',
+              spotName: template['a']!,
+              description: template['a_desc']!,
+              estimatedCost: '₹${afternoonCost.toInt()}',
+              duration: '3.0 Hours',
+            ),
+            ActivityStop(
+              timeOfDay: 'Evening (5:30 PM)',
+              spotName: template['e']!,
+              description: template['e_desc']!,
+              estimatedCost: '₹${eveningCost.toInt()}',
+              duration: '2.5 Hours',
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ItineraryPlan(
+      city: city,
+      budget: budget,
+      durationDays: days,
+      interests: interests,
+      days: dayPlans,
+      totalEstimatedBudget: '₹${budget.toInt()}',
+    );
+  }
+}
