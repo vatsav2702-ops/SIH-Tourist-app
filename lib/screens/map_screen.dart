@@ -39,9 +39,33 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   int _currentStepIndex = 0;
   DateTime _lastRerouteTime = DateTime.now().subtract(const Duration(seconds: 10));
 
+  // The RAW, most recent GPS fix — used for logic that needs ground
+  // truth (off-route detection, arrival checks, distance-to-next-step).
+  // Kept separate from what's actually drawn on screen (below), so
+  // animating the visuals never introduces lag into navigation logic.
+  DateTime? _lastGpsFixTime;
+
+  // The DISPLAYED marker/camera position — dead-reckoned (interpolated)
+  // between the last two GPS fixes over the real time gap between
+  // them, so the dot glides continuously at roughly true speed
+  // instead of teleporting once per fix and sitting still in between.
+  LatLng? _displayedUserLatLng;
+  double _displayedHeading = 0.0;
+
+  // Reused across every GPS tick during live-follow tracking, instead
+  // of creating a fresh AnimationController per update (which was
+  // both wasteful and could overlap/stutter). Kept short (200ms,
+  // linear) so back-to-back GPS updates read as one continuous glide
+  // rather than a series of small eased hops.
+  late final AnimationController _followController;
+
   @override
   void initState() {
     super.initState();
+    _followController = AnimationController(
+      duration: const Duration(milliseconds: 200),
+      vsync: this,
+    );
     _initLocation();
 
     if (widget.initialNavigateSpot != null) {
@@ -54,7 +78,60 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   @override
   void dispose() {
     _positionStreamSub?.cancel();
+    _followController.dispose();
     super.dispose();
+  }
+
+  /// Dead-reckoning glide: interpolates the DISPLAYED user position
+  /// (marker + camera, if following) from wherever it currently sits
+  /// to the new GPS fix, over the actual real-world time gap since
+  /// the previous fix — not a fixed short animation. This is what
+  /// makes the dot appear to move continuously "parallel" to the
+  /// user's real walking/driving pace, arriving at the new fix right
+  /// as the next one comes in, instead of teleporting + freezing.
+  void _glideDisplayedPositionTo(LatLng target, double targetHeading, Duration duration) {
+    final start = _displayedUserLatLng ?? target;
+    final startHeading = _displayedHeading;
+
+    // Shortest-path heading interpolation so a turn from 350° to 10°
+    // sweeps 20° forward, not the long way around through 180°.
+    double headingDelta = targetHeading - startHeading;
+    headingDelta = ((headingDelta + 180) % 360) - 180;
+
+    _followController.stop();
+    _followController.duration = duration;
+    _followController.reset();
+
+    final latTween = Tween<double>(begin: start.latitude, end: target.latitude);
+    final lngTween = Tween<double>(begin: start.longitude, end: target.longitude);
+
+    void listener() {
+      final t = _followController.value;
+      final lat = latTween.transform(t);
+      final lng = lngTween.transform(t);
+      final heading = startHeading + headingDelta * t;
+      final displayed = LatLng(lat, lng);
+
+      setState(() {
+        _displayedUserLatLng = displayed;
+        _displayedHeading = heading;
+      });
+
+      // Camera rides along with the same interpolated position every
+      // frame, so marker and camera never drift out of sync with
+      // each other.
+      if (_isFollowingUser && _activeNavSpot != null) {
+        _mapController.move(
+          displayed,
+          _mapController.camera.zoom < 14.5 ? 15.5 : _mapController.camera.zoom,
+        );
+      }
+    }
+
+    _followController.addListener(listener);
+    _followController.forward().whenCompleteOrCancel(() {
+      _followController.removeListener(listener);
+    });
   }
 
   /// Butter-smooth Google Maps-like 60fps animated camera transitions
@@ -105,7 +182,11 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       final userPos = LatLng(pos.latitude, pos.longitude);
       setState(() {
         _currentUserLatLng = userPos;
-        if (pos.heading > 0) _currentHeading = pos.heading;
+        _displayedUserLatLng = userPos;
+        if (pos.heading > 0) {
+          _currentHeading = pos.heading;
+          _displayedHeading = pos.heading;
+        }
       });
       if (_activeNavSpot == null) {
         _animatedMapMove(userPos, 13.5);
@@ -131,7 +212,11 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
     setState(() {
       _currentUserLatLng = startLatLng;
-      if (pos != null && pos.heading > 0) _currentHeading = pos.heading;
+      _displayedUserLatLng = startLatLng;
+      if (pos != null && pos.heading > 0) {
+        _currentHeading = pos.heading;
+        _displayedHeading = pos.heading;
+      }
     });
 
     final route = await RoutingService().fetchRoute(
@@ -175,20 +260,31 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         heading = RoutingService().calculateBearing(_currentUserLatLng!, newLatLng);
       }
 
+      // Raw ground-truth state updates immediately — navigation logic
+      // (off-route detection, arrival, distance-to-step) always reads
+      // the true fix, never the animated/interpolated one.
       setState(() {
         _currentUserLatLng = newLatLng;
         _currentHeading = heading;
         _currentSpeedKmH = speedKmH;
       });
 
+      // Glide the DISPLAYED marker/camera position across the real
+      // time gap since the last fix, so motion reads as continuous
+      // rather than "teleport, then freeze for ~2s, repeat."  Clamped
+      // so a very first fix or a long GPS dropout doesn't produce an
+      // absurdly slow or instant glide.
+      final now = DateTime.now();
+      final rawGap = _lastGpsFixTime == null ? const Duration(milliseconds: 800) : now.difference(_lastGpsFixTime!);
+      final clampedGap = rawGap < const Duration(milliseconds: 300)
+          ? const Duration(milliseconds: 300)
+          : (rawGap > const Duration(seconds: 4) ? const Duration(seconds: 4) : rawGap);
+      _lastGpsFixTime = now;
+      _glideDisplayedPositionTo(newLatLng, heading, clampedGap);
+
       // If active navigation mode, handle dynamic routing & step progression
       if (_activeNavSpot != null && _activeRoute != null) {
         _handleDynamicLocationProgress(newLatLng);
-      }
-
-      // Smoothly follow user if tracking mode is active
-      if (_isFollowingUser && _activeNavSpot != null) {
-        _mapController.move(newLatLng, _mapController.camera.zoom < 14.5 ? 15.5 : _mapController.camera.zoom);
       }
     });
   }
@@ -327,8 +423,11 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   List<Marker> _buildMarkers(List<Spot> spots) {
     final List<Marker> markers = [];
 
-    // 1. Google Maps-style Directional Navigation Puck
-    final userPos = _currentUserLatLng ??
+    // 1. Google Maps-style Directional Navigation Puck — renders the
+    // interpolated DISPLAYED position (continuous glide), not the raw
+    // GPS fix (which would still snap once per update).
+    final userPos = _displayedUserLatLng ??
+        _currentUserLatLng ??
         (LocationService().currentPosition != null
             ? LatLng(LocationService().currentPosition!.latitude, LocationService().currentPosition!.longitude)
             : null);
@@ -353,7 +452,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               ),
               // Direction Chevron Puck
               Transform.rotate(
-                angle: _currentHeading * (pi / 180),
+                angle: _displayedHeading * (pi / 180),
                 child: Container(
                   width: 30,
                   height: 30,
@@ -619,6 +718,14 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                 initialZoom: 12.5,
                 minZoom: 3.0,
                 maxZoom: 18.5,
+                // Full gesture set (pinch, drag, fling, rotate) — the
+                // default flutter_map config only allows a subset,
+                // which is what made panning/zooming feel stiffer
+                // than Google Maps. This also enables inertial fling
+                // scrolling, a big part of the "smooth" feel.
+                interactionOptions: const InteractionOptions(
+                  flags: InteractiveFlag.all,
+                ),
                 onPositionChanged: (pos, hasGesture) {
                   if (hasGesture && _isFollowingUser) {
                     setState(() => _isFollowingUser = false);
@@ -627,9 +734,30 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               ),
               children: [
                 TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  // CartoDB Voyager: CDN-backed, retina-ready basemap —
+                  // noticeably faster and crisper than raw
+                  // tile.openstreetmap.org, and closer to Google Maps'
+                  // light, clean cartography style. Still free, no API
+                  // key or billing required.
+                  urlTemplate:
+                      'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+                  subdomains: const ['a', 'b', 'c', 'd'],
                   userAgentPackageName: 'com.example.smart_travel_companion',
                   maxZoom: 19,
+                  // Renders @2x tiles on high-DPI phones so the map
+                  // doesn't look blurry next to Google Maps' native app.
+                  retinaMode: MediaQuery.of(context).devicePixelRatio > 1.0,
+                  // Prefetches a ring of tiles just outside the
+                  // viewport so panning never shows a blank/grey tile
+                  // popping in — this is most of what makes Google
+                  // Maps feel like it has "no loading."
+                  keepBuffer: 5,
+                  panBuffer: 2,
+                  // Soft cross-fade instead of a hard pop when a new
+                  // tile finishes loading.
+                  tileDisplay: const TileDisplay.fadeIn(
+                    duration: Duration(milliseconds: 250),
+                  ),
                 ),
 
                 // Multi-Layer Google Maps-grade Polyline
@@ -654,6 +782,24 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                 // Markers Layer
                 MarkerLayer(
                   markers: markers,
+                ),
+
+                // Required attribution for CartoDB/OpenStreetMap free
+                // tiles. Small, unobtrusive, tucked into the corner —
+                // Google Maps shows one too, just less visible.
+                RichAttributionWidget(
+                  alignment: AttributionAlignment.bottomLeft,
+                  popupInitialDisplayDuration: const Duration(seconds: 3),
+                  attributions: [
+                    TextSourceAttribution(
+                      'CARTO',
+                      onTap: () {},
+                    ),
+                    TextSourceAttribution(
+                      'OpenStreetMap contributors',
+                      onTap: () {},
+                    ),
+                  ],
                 ),
               ],
             ),

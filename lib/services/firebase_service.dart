@@ -28,7 +28,7 @@ class FirebaseService {
         history: 'Dating back to the 8th century, the Kanaka Durga Temple is mentioned in ancient scriptures. Arjuna is believed to have obtained the Pasupatastra here after praying to Lord Shiva.',
         operatingHours: '4:00 AM - 9:00 PM Daily',
         ticketFees: 'Free Entry (Rs. 100/300 Quick Darshan)',
-        imageUrl: 'https://images.unsplash.com/photo-1609766857041-ed402ea8069a?auto=format&fit=crop&w=800&q=80',
+        imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/b/ba/Kanakadurga_Temple_gopuram.jpg?utm_source=en.wikipedia.org&utm_campaign=index&utm_content=original',
         lat: 16.5161,
         lng: 80.6074,
         audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
