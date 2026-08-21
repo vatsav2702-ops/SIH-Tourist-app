@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "386593840323",
+    "project_id": "sih-tourist-app",
+    "storage_bucket": "sih-tourist-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:386593840323:android:99aa90813443b5e484d676",
+        "android_client_info": {
+          "package_name": "com.example.smart_travel_companion"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDtX5mgE9sUA6W0ACDPJrCegR7Lb4X9DrU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
