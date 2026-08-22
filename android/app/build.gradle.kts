@@ -22,6 +22,9 @@ android {
         applicationId = "com.example.smart_travel_companion"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
+        // minSdk 23 is required by google_mlkit_translation — left on
+        // Flutter's default (often 21) this fails at manifest-merge
+        // time, not with a Dart error, so it's easy to miss.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
@@ -45,6 +48,14 @@ kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
+}
+
+dependencies {
+    // google_mlkit_text_recognition bundles the Latin model by
+    // default. Devanagari (Hindi/Marathi) needs its model added
+    // explicitly on Android, or TextRecognizer(script: devanagiri)
+    // compiles fine but fails at runtime.
+    implementation("com.google.mlkit:text-recognition-devanagari:16.0.1")
 }
 
 flutter {

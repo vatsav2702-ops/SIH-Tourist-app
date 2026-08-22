@@ -1,11 +1,109 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:google_generative_ai/google_generative_ai.dart';
 import '../models/itinerary_model.dart';
+
+class TranslationResult {
+  final String translated; // native script
+  final String romanized; // pronunciation guide in Latin letters
+
+  TranslationResult({required this.translated, required this.romanized});
+
+  /// Matches the display format already used by the static phrasebook:
+  /// "நல்ல... (Nalla...)"
+  String get display => '$translated ($romanized)';
+}
 
 class GeminiService {
   final String? apiKey;
 
   GeminiService({this.apiKey});
+
+  String? get _effectiveApiKey {
+    final key = apiKey ?? const String.fromEnvironment('GEMINI_API_KEY', defaultValue: '');
+    return key.isEmpty ? null : key;
+  }
+
+  /// Whether a Gemini API key is actually configured — screens can use
+  /// this to decide whether to show a "live translation" vs
+  /// "sample phrasebook only" state.
+  bool get isConfigured => _effectiveApiKey != null;
+
+  /// Translates a single phrase for a tourist, returning both the
+  /// native-script translation and a romanized pronunciation guide —
+  /// same two-part format the static phrasebook already displays.
+  /// Returns null (never throws) on missing key or any API/network
+  /// failure, so callers can fall back to the static phrasebook.
+  Future<TranslationResult?> translateText({
+    required String text,
+    required String sourceLang,
+    required String targetLang,
+  }) async {
+    final key = _effectiveApiKey;
+    if (key == null || text.trim().isEmpty) return null;
+
+    try {
+      final model = GenerativeModel(
+        model: 'gemini-2.5-flash',
+        apiKey: key,
+        generationConfig: GenerationConfig(
+          responseMimeType: 'application/json',
+          temperature: 0.3, // translations should be literal, not creative
+        ),
+      );
+
+      final prompt = '''
+Translate this phrase for an Indian tourist, from $sourceLang to $targetLang.
+Respond ONLY with valid JSON, no other text:
+{"translated": "translation in $targetLang native script", "romanized": "phonetic pronunciation using Latin letters"}
+
+If $targetLang is English, "translated" and "romanized" can be the same plain English text.
+
+Phrase: "$text"
+''';
+
+      final response = await model.generateContent([Content.text(prompt)]);
+      if (response.text == null || response.text!.isEmpty) return null;
+
+      final jsonMap = jsonDecode(response.text!);
+      return TranslationResult(
+        translated: jsonMap['translated'] as String? ?? '',
+        romanized: jsonMap['romanized'] as String? ?? '',
+      );
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Reads visible text directly from a photo using Gemini's vision
+  /// model — the fallback path for scripts Google ML Kit's on-device
+  /// text recognizer doesn't support (notably Telugu and Tamil; ML Kit
+  /// only covers Latin, Chinese, Devanagari, Japanese, Korean).
+  /// Returns null on missing key or any failure.
+  Future<String?> readTextFromImage(Uint8List imageBytes) async {
+    final key = _effectiveApiKey;
+    if (key == null) return null;
+
+    try {
+      final model = GenerativeModel(model: 'gemini-2.5-flash', apiKey: key);
+      final response = await model.generateContent([
+        Content.multi([
+          TextPart(
+            'Read every piece of visible text in this photo (sign, menu, label — any language or script) '
+            'and return it verbatim, exactly as written, with no translation, explanation, or extra commentary. '
+            'If there is no readable text, respond with exactly: NO_TEXT_FOUND',
+          ),
+          DataPart('image/jpeg', imageBytes),
+        ]),
+      ]);
+
+      final text = response.text?.trim();
+      if (text == null || text.isEmpty || text == 'NO_TEXT_FOUND') return null;
+      return text;
+    } catch (e) {
+      return null;
+    }
+  }
 
   Future<ItineraryPlan> generateItinerary({
     required String city,
