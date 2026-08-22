@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:google_mlkit_translation/google_mlkit_translation.dart';
+import '../services/ml_translation_service.dart';
+import 'camera_translate_screen.dart';
+import 'language_downloads_screen.dart';
 
 class PhraseItem {
   final String english;
@@ -31,9 +35,28 @@ class _TranslatorScreenState extends State<TranslatorScreen> {
     text: 'How much is the auto fare to the temple?',
   );
 
-  String _translatedText = 'గుడికి ఆటో ఛార్జ్ ఎంత అవుతుంది? (Gudiki auto charge entha avuthundi?)';
+  String _translatedText = 'Type a phrase above and tap translate.';
   bool _isTranslating = false;
   bool _isListening = false;
+
+  final MLTranslationService _mlTranslator = MLTranslationService();
+
+  TranslateLanguage _getMLLanguage(String language) {
+    switch (language) {
+      case 'English':
+        return TranslateLanguage.english;
+      case 'Hindi':
+        return TranslateLanguage.hindi;
+      case 'Telugu':
+        return TranslateLanguage.telugu;
+      case 'Tamil':
+        return TranslateLanguage.tamil;
+      case 'Marathi':
+        return TranslateLanguage.marathi;
+      default:
+        return TranslateLanguage.english;
+    }
+  }
 
   final Map<String, Map<String, String>> _quickTranslations = {
     'How much is the auto fare?': {
@@ -62,20 +85,71 @@ class _TranslatorScreenState extends State<TranslatorScreen> {
     },
   };
 
-  void _translate() {
-    setState(() => _isTranslating = true);
-    Future.delayed(const Duration(milliseconds: 600), () {
-      if (mounted) {
-        String input = _inputController.text.trim();
-        String result = _quickTranslations[input]?[_targetLang] ??
-            'translatedText in $_targetLang: "$input"';
+  /// On-device translation via Google ML Kit for anything not in the
+  /// static phrasebook. First call for a language pair downloads that
+  /// pair's model (can take a moment on first use / needs network
+  /// once); later calls for the same pair are instant and offline.
+  Future<void> _translate() async {
+    final input = _inputController.text.trim();
 
-        setState(() {
-          _translatedText = result;
-          _isTranslating = false;
-        });
-      }
+    if (input.isEmpty) return;
+
+    // Keep your existing phrasebook instant translations.
+    final staticMatch = _quickTranslations[input]?[_targetLang];
+
+    if (staticMatch != null) {
+      if (!mounted) return;
+
+      setState(() {
+        _translatedText = staticMatch;
+        _isTranslating = false;
+      });
+
+      return;
+    }
+
+    setState(() {
+      _isTranslating = true;
     });
+
+    try {
+      final sourceLanguage = _getMLLanguage(_sourceLang);
+      final targetLanguage = _getMLLanguage(_targetLang);
+
+      await _mlTranslator.initialize(
+        sourceLanguage: sourceLanguage,
+        targetLanguage: targetLanguage,
+      );
+
+      final result = await _mlTranslator.translate(input);
+
+      if (!mounted) return;
+
+      setState(() {
+        _translatedText = result;
+        _isTranslating = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _translatedText = 'Translation unavailable: ${e.toString().replaceAll('Exception: ', '')}';
+        _isTranslating = false;
+      });
+
+      debugPrint('ML Kit translation error: $e');
+    }
+  }
+
+  Future<void> _scanWithCamera() async {
+    final result = await Navigator.push<CameraTranslateResult>(
+      context,
+      MaterialPageRoute(builder: (_) => const CameraTranslateScreen()),
+    );
+    if (result != null && mounted) {
+      _inputController.text = result.recognizedText;
+      _translate();
+    }
   }
 
   void _toggleListening() {
@@ -99,7 +173,12 @@ class _TranslatorScreenState extends State<TranslatorScreen> {
       });
     }
   }
-
+  @override
+  void dispose() {
+    _inputController.dispose();
+    _mlTranslator.dispose();
+    super.dispose();
+  }
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -151,6 +230,16 @@ class _TranslatorScreenState extends State<TranslatorScreen> {
                         ),
                       ],
                     ),
+                  ),
+                  IconButton(
+                    tooltip: 'Manage downloaded languages',
+                    icon: const Icon(Icons.download_for_offline_rounded, color: Colors.white),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const LanguageDownloadsScreen()),
+                      );
+                    },
                   ),
                 ],
               ),
@@ -242,13 +331,22 @@ class _TranslatorScreenState extends State<TranslatorScreen> {
                         label: Text(_isListening ? 'Listening...' : 'Voice Input'),
                         onPressed: _toggleListening,
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.volume_up_rounded, color: Color(0xFF4F46E5)),
-                        onPressed: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Playing audio in $_sourceLang...')),
-                          );
-                        },
+                      Row(
+                        children: [
+                          IconButton(
+                            tooltip: 'Scan text with camera',
+                            icon: const Icon(Icons.camera_alt_rounded, color: Color(0xFF0D9488)),
+                            onPressed: _scanWithCamera,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.volume_up_rounded, color: Color(0xFF4F46E5)),
+                            onPressed: () {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Playing audio in $_sourceLang...')),
+                              );
+                            },
+                          ),
+                        ],
                       ),
                     ],
                   ),
